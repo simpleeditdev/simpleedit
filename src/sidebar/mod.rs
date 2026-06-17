@@ -39,9 +39,9 @@ impl SidebarState {
 
     pub fn add_file(&mut self, path: PathBuf) {
         if !self.files.contains(&path) {
-            self.files.push(path);
+            self.files.push(path.clone());
         }
-        self.selected = self.files.len().checked_sub(1);
+        self.selected = self.files.iter().position(|p| p == &path);
     }
 
     pub fn update(&mut self, msg: SidebarMessage) -> SidebarAction {

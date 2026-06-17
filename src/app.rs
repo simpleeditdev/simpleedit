@@ -204,6 +204,12 @@ impl Application for TinctaApp {
                 match result {
                     Ok(path) => {
                         self.sidebar.add_file(path.clone());
+                        let ext = path
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("")
+                            .to_string();
+                        self.editor.set_language_by_extension(&ext);
                         self.current_file = Some(path);
                         self.is_dirty = false;
                         self.status_message = t!("status.file_saved").to_string();
