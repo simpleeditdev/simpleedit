@@ -7,7 +7,7 @@ description: |
   (English and French). Compatible with Ubuntu, Debian, and other Linux distros.
 
 grade: stable
-confinement: classic
+confinement: strict
 base: core22
 
 architectures:
@@ -35,3 +35,11 @@ apps:
     desktop: usr/share/applications/tincta.desktop
     environment:
       WINIT_UNIX_BACKEND: x11
+    plugs:
+      - home
+      - removable-media
+      - desktop
+      - desktop-legacy
+      - x11
+      - wayland
+      - opengl
