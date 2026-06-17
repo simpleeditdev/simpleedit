@@ -1,8 +1,8 @@
 pub mod highlighter;
 
 use iced::{
-    widget::{container, text_editor},
-    Element, Length,
+    widget::{container, row, text, text_editor},
+    Element, Font, Length,
 };
 use iced::highlighter as hl;
 
@@ -33,29 +33,61 @@ impl EditorState {
     }
 
     pub fn view(&self, config: &Config) -> Element<Message> {
-        let extension = self.language.clone().unwrap_or_default();
         let hl_theme = if config.dark_mode {
             hl::Theme::SolarizedDark
         } else {
             hl::Theme::InspiredGitHub
         };
+        let extension = self.language.clone().unwrap_or_default();
 
         let editor = text_editor(&self.content)
             .on_action(Message::EditorAction)
             .highlight::<hl::Highlighter>(
-                hl::Settings {
-                    theme: hl_theme,
-                    extension,
-                },
+                hl::Settings { theme: hl_theme, extension },
                 |highlight, _theme| highlight.to_format(),
             )
+            .style(iced::theme::TextEditor::Custom(Box::new(
+                crate::theme::EditorStyle { dark: config.dark_mode },
+            )))
             .height(Length::Fill);
 
-        container(editor)
-            .width(Length::Fill)
+        if config.show_line_numbers {
+            let raw = self.content.text();
+            let base = raw.lines().count().max(1);
+            // text_editor shows an implicit empty line after a trailing '\n'
+            let line_count = if raw.ends_with('\n') { base + 1 } else { base };
+
+            let numbers: String = (1..=line_count)
+                .map(|n| format!("{:>4}", n))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            // text_editor internal top padding = 5px, container top = 8px → total = 13px.
+            // Use line_height 1.3 to match cosmic-text default used by text_editor.
+            let gutter = container(
+                text(numbers)
+                    .size(16.0)
+                    .line_height(1.3_f32)
+                    .font(Font::MONOSPACE)
+                    .style(crate::theme::muted_text(config.dark_mode)),
+            )
+            .padding(iced::Padding { top: 13.0, right: 6.0, bottom: 8.0, left: 8.0 })
             .height(Length::Fill)
-            .padding([8, 14])
+            .style(crate::theme::gutter(config.dark_mode));
+
+            row![
+                gutter,
+                container(editor).width(Length::Fill).padding([8, 14]),
+            ]
+            .height(Length::Fill)
             .into()
+        } else {
+            container(editor)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .padding([8, 14])
+                .into()
+        }
     }
 }
 
@@ -103,6 +135,8 @@ pub mod statusbar {
         current_file: &'a Option<PathBuf>,
         is_dirty: bool,
         dark: bool,
+        cursor: (usize, usize),
+        is_error: bool,
     ) -> Element<'a, Message> {
         let file_info = current_file
             .as_ref()
@@ -113,16 +147,23 @@ pub mod statusbar {
         let dirty_indicator = if is_dirty { " •" } else { "" };
         let muted = theme::muted_text(dark);
 
+        let (line, col) = cursor;
+        let cursor_text = format!("Ln {}, Col {}", line + 1, col + 1);
+
+        // Error messages use the danger color so they're impossible to miss
+        let status_color = if is_error {
+            iced::Color::from_rgb(0.88, 0.27, 0.18) // red-orange
+        } else {
+            muted
+        };
+
         let bar = row![
-            text(status).size(11).style(muted),
+            text(status).size(11).style(status_color),
             Space::with_width(Length::Fill),
-            text(format!("{}{}", file_info, dirty_indicator))
+            text(cursor_text).size(11).style(muted),
+            text(format!("  {}{}", file_info, dirty_indicator))
                 .size(11)
-                .style(if is_dirty {
-                    theme::accent_color()
-                } else {
-                    muted
-                }),
+                .style(if is_dirty { theme::accent_color() } else { muted }),
         ]
         .padding([5, 10]);
 

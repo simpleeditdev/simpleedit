@@ -5,6 +5,7 @@ use iced::{
 
 use crate::app::{Message, TopMenu};
 use crate::config::Config;
+use crate::preferences::PreferencesMessage;
 use crate::theme;
 
 /// Just the menu bar row — no dropdown, no layout side effects.
@@ -38,8 +39,8 @@ pub fn view(config: &Config, open: Option<TopMenu>) -> Element<'static, Message>
 }
 
 /// The floating dropdown panel for the active menu. Call only when a menu is open.
-pub fn dropdown_view(menu: TopMenu, config: &Config) -> Element<'static, Message> {
-    let items = menu_items(menu, config);
+pub fn dropdown_view(menu: TopMenu, config: &Config, has_formatter: bool) -> Element<'static, Message> {
+    let items = menu_items(menu, config, has_formatter);
     container(column(items).spacing(2).padding(6).width(220))
         .style(theme::card(config.dark_mode))
         .into()
@@ -72,7 +73,16 @@ fn item(label: String, dark: bool, message: Message) -> Element<'static, Message
         .into()
 }
 
-fn menu_items(menu: TopMenu, config: &Config) -> Vec<Element<'static, Message>> {
+fn disabled_item(label: String, dark: bool) -> Element<'static, Message> {
+    container(
+        text(label).size(13).style(crate::theme::muted_text(dark))
+    )
+    .padding([6, 10])
+    .width(Length::Fill)
+    .into()
+}
+
+fn menu_items(menu: TopMenu, config: &Config, has_formatter: bool) -> Vec<Element<'static, Message>> {
     let dark = config.dark_mode;
     match menu {
         TopMenu::File => vec![
@@ -91,23 +101,31 @@ fn menu_items(menu: TopMenu, config: &Config) -> Vec<Element<'static, Message>> 
             ),
             item(t!("menu.file_quit").to_string(), dark, Message::Quit),
         ],
-        TopMenu::Edit => vec![
-            item(
-                t!("menu.edit_select_all").to_string(),
-                dark,
-                Message::SelectAll,
-            ),
-            item(
-                t!("menu.edit_find").to_string(),
-                dark,
-                Message::ToggleSearch,
-            ),
-            item(
-                t!("menu.edit_preferences").to_string(),
-                dark,
-                Message::TogglePreferences,
-            ),
-        ],
+        TopMenu::Edit => {
+            let format_item: Element<'static, Message> = if has_formatter {
+                item(t!("menu.edit_format").to_string(), dark, Message::FormatFile)
+            } else {
+                disabled_item(t!("menu.edit_format").to_string(), dark)
+            };
+            vec![
+                item(
+                    t!("menu.edit_select_all").to_string(),
+                    dark,
+                    Message::SelectAll,
+                ),
+                item(
+                    t!("menu.edit_find").to_string(),
+                    dark,
+                    Message::ToggleSearch,
+                ),
+                format_item,
+                item(
+                    t!("menu.edit_preferences").to_string(),
+                    dark,
+                    Message::TogglePreferences,
+                ),
+            ]
+        }
         TopMenu::View => vec![
             item(
                 t!("menu.view_sidebar").to_string(),
@@ -122,6 +140,15 @@ fn menu_items(menu: TopMenu, config: &Config) -> Vec<Element<'static, Message>> 
                 },
                 dark,
                 Message::ThemeChanged(!dark),
+            ),
+            item(
+                if config.show_line_numbers {
+                    t!("menu.view_line_numbers_hide").to_string()
+                } else {
+                    t!("menu.view_line_numbers_show").to_string()
+                },
+                dark,
+                Message::Preferences(PreferencesMessage::ShowLineNumbersToggled(!config.show_line_numbers)),
             ),
         ],
         TopMenu::Help => vec![item(

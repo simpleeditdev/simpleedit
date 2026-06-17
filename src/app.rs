@@ -3,6 +3,7 @@ use iced::{
     widget::{button, column, container, row, text, text_editor},
     Application, Command, Element, Length, Theme,
 };
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::{
@@ -49,6 +50,11 @@ pub enum Message {
     ContextPaste,
     ContextDelete,
     ClipboardContent(Option<String>),
+    FormatFile,
+    FormatSelection,
+    FileFormatted(Result<String, String>),
+    SelectionFormatted(Result<String, String>),
+    CloseErrorPanel,
 }
 
 pub struct TinctaApp {
@@ -63,7 +69,14 @@ pub struct TinctaApp {
     open_menu: Option<TopMenu>,
     current_file: Option<PathBuf>,
     is_dirty: bool,
+    is_formatting: bool,
     status_message: String,
+    status_is_error: bool,
+    format_error: Option<String>,
+    show_error_panel: bool,
+    untitled_counter: u32,
+    // In-memory cache of unsaved file states: path → (content, language, is_dirty)
+    file_cache: HashMap<PathBuf, (String, Option<String>, bool)>,
 }
 
 impl Application for TinctaApp {
@@ -75,20 +88,30 @@ impl Application for TinctaApp {
     fn new(_flags: ()) -> (Self, Command<Message>) {
         let config = Config::load();
         let editor = EditorState::new();
+        // Start with one untitled file so the editor always has an identity
+        let initial_path = untitled_path(1);
+        let mut sidebar = SidebarState::new();
+        sidebar.add_file(initial_path.clone());
 
         (
             Self {
                 editor,
-                sidebar: SidebarState::new(),
+                sidebar,
                 search: SearchState::new(),
                 preferences: PreferencesState::from_config(&config),
                 show_search: false,
                 show_sidebar: true,
                 show_preferences: false,
                 open_menu: None,
-                current_file: None,
+                current_file: Some(initial_path),
                 is_dirty: false,
+                is_formatting: false,
                 status_message: t!("status.ready").to_string(),
+                status_is_error: false,
+                format_error: None,
+                show_error_panel: false,
+                untitled_counter: 1,
+                file_cache: HashMap::new(),
                 config,
             },
             Command::none(),
@@ -156,8 +179,18 @@ impl Application for TinctaApp {
                 Command::none()
             }
             Message::NewFile => {
+                // Save current state before switching
+                if let Some(current) = self.current_file.clone() {
+                    self.file_cache.insert(
+                        current,
+                        (self.editor.content.text().to_string(), self.editor.language.clone(), self.is_dirty),
+                    );
+                }
+                self.untitled_counter += 1;
+                let path = untitled_path(self.untitled_counter);
                 self.editor = EditorState::new();
-                self.current_file = None;
+                self.current_file = Some(path.clone());
+                self.sidebar.add_file(path);
                 self.is_dirty = false;
                 self.status_message = t!("status.new_file").to_string();
                 Command::none()
@@ -185,15 +218,12 @@ impl Application for TinctaApp {
                 Command::none()
             }
             Message::SaveFile => {
-                if let Some(ref path) = self.current_file.clone() {
-                    let content = self.editor.content.text().to_string();
-                    let path = path.clone();
-                    Command::perform(save_file(path, content), Message::FileSaved)
-                } else {
-                    Command::perform(
-                        save_file_as(self.editor.content.text().to_string()),
-                        Message::FileSaved,
-                    )
+                let content = self.editor.content.text().to_string();
+                match self.current_file.clone() {
+                    Some(path) if !is_untitled(&path) => {
+                        Command::perform(save_file(path, content), Message::FileSaved)
+                    }
+                    _ => Command::perform(save_file_as(content), Message::FileSaved),
                 }
             }
             Message::SaveFileAs => Command::perform(
@@ -203,6 +233,14 @@ impl Application for TinctaApp {
             Message::FileSaved(result) => {
                 match result {
                     Ok(path) => {
+                        self.file_cache.remove(&path);
+                        // If saving an untitled file for the first time, replace its slot
+                        if let Some(old) = &self.current_file {
+                            if is_untitled(old) {
+                                self.file_cache.remove(old);
+                                self.sidebar.rename_file(old, path.clone());
+                            }
+                        }
                         self.sidebar.add_file(path.clone());
                         let ext = path
                             .extension()
@@ -247,6 +285,26 @@ impl Application for TinctaApp {
             Message::Sidebar(msg) => match self.sidebar.update(msg) {
                 SidebarAction::OpenFile(path) => {
                     if self.current_file.as_ref() == Some(&path) {
+                        return Command::none();
+                    }
+                    // Save current editor state before switching
+                    if let Some(current) = self.current_file.clone() {
+                        self.file_cache.insert(
+                            current,
+                            (
+                                self.editor.content.text().to_string(),
+                                self.editor.language.clone(),
+                                self.is_dirty,
+                            ),
+                        );
+                    }
+                    // Restore from cache or load from disk
+                    if let Some((content, language, dirty)) = self.file_cache.get(&path).cloned() {
+                        self.editor = EditorState::from_content(&content);
+                        self.editor.language = language;
+                        self.current_file = Some(path);
+                        self.is_dirty = dirty;
+                        self.status_message = t!("status.file_opened").to_string();
                         Command::none()
                     } else {
                         Command::perform(read_file(path), Message::FileOpened)
@@ -254,6 +312,7 @@ impl Application for TinctaApp {
                 }
                 SidebarAction::CloseFile(path) => {
                     if self.current_file.as_ref() == Some(&path) {
+                        self.file_cache.remove(&path);
                         self.editor = EditorState::new();
                         self.current_file = None;
                         self.is_dirty = false;
@@ -320,6 +379,76 @@ impl Application for TinctaApp {
                 self.is_dirty = true;
                 Command::none()
             }
+            Message::FormatFile => {
+                if let Some(ext) = self.editor.language.clone() {
+                    self.is_formatting = true;
+                    self.status_message = t!("status.formatting").to_string();
+                    let content = self.editor.content.text().to_string();
+                    Command::perform(crate::formatter::format(content, ext), Message::FileFormatted)
+                } else {
+                    self.status_message = t!("status.no_language").to_string();
+                    Command::none()
+                }
+            }
+            Message::FormatSelection => {
+                if let (Some(ext), Some(selected)) = (
+                    self.editor.language.clone(),
+                    self.editor.content.selection(),
+                ) {
+                    self.is_formatting = true;
+                    self.status_message = t!("status.formatting").to_string();
+                    Command::perform(
+                        crate::formatter::format(selected, ext),
+                        Message::SelectionFormatted,
+                    )
+                } else {
+                    Command::none()
+                }
+            }
+            Message::FileFormatted(result) => {
+                self.is_formatting = false;
+                match result {
+                    Ok(formatted) => {
+                        self.editor.content = text_editor::Content::with_text(&formatted);
+                        self.is_dirty = true;
+                        self.status_is_error = false;
+                        self.format_error = None;
+                        self.status_message = t!("status.formatted").to_string();
+                    }
+                    Err(e) => {
+                        self.status_is_error = true;
+                        self.format_error = Some(e.clone());
+                        self.show_error_panel = true;
+                        self.status_message = t!("status.format_error").to_string();
+                    }
+                }
+                Command::none()
+            }
+            Message::SelectionFormatted(result) => {
+                self.is_formatting = false;
+                match result {
+                    Ok(formatted) => {
+                        self.editor.content.perform(text_editor::Action::Edit(
+                            text_editor::Edit::Paste(std::sync::Arc::new(formatted)),
+                        ));
+                        self.is_dirty = true;
+                        self.status_is_error = false;
+                        self.format_error = None;
+                        self.status_message = t!("status.formatted").to_string();
+                    }
+                    Err(e) => {
+                        self.status_is_error = true;
+                        self.format_error = Some(e.clone());
+                        self.show_error_panel = true;
+                        self.status_message = t!("status.format_error").to_string();
+                    }
+                }
+                Command::none()
+            }
+            Message::CloseErrorPanel => {
+                self.show_error_panel = false;
+                Command::none()
+            }
         }
     }
 
@@ -366,11 +495,17 @@ impl Application for TinctaApp {
         let lbl_copy = t!("ctx.copy").to_string();
         let lbl_paste = t!("ctx.paste").to_string();
         let lbl_delete = t!("ctx.delete").to_string();
+        let lbl_format_sel = t!("ctx.format_selection").to_string();
+        let lbl_format_all = t!("ctx.format_all").to_string();
+        let has_fmt_ctx = self.editor.language.as_deref()
+            .map(|ext| crate::formatter::has_formatter(ext))
+            .unwrap_or(false);
+        let has_sel_ctx = self.editor.content.selection().is_some();
         let editor_with_context = iced_aw::ContextMenu::new(editor_widget, move || {
             let item = |label: String, msg: Message| -> Element<'static, Message> {
                 button(text(label).size(13))
                     .padding([6, 10])
-                    .width(Length::Fixed(180.0))
+                    .width(Length::Fixed(200.0))
                     .on_press(msg)
                     .style(iced::theme::Button::custom(crate::theme::GhostButton {
                         dark,
@@ -378,16 +513,33 @@ impl Application for TinctaApp {
                     }))
                     .into()
             };
+            let disabled = |label: String| -> Element<'static, Message> {
+                container(text(label).size(13).style(crate::theme::muted_text(dark)))
+                    .padding([6, 10])
+                    .width(Length::Fixed(200.0))
+                    .into()
+            };
+            let fmt_sel_el: Element<'static, Message> = if has_fmt_ctx && has_sel_ctx {
+                item(lbl_format_sel.clone(), Message::FormatSelection)
+            } else {
+                disabled(lbl_format_sel.clone())
+            };
+            let fmt_all_el: Element<'static, Message> = if has_fmt_ctx {
+                item(lbl_format_all.clone(), Message::FormatFile)
+            } else {
+                disabled(lbl_format_all.clone())
+            };
+            let ctx_items: Vec<Element<'static, Message>> = vec![
+                item(lbl_select_all.clone(), Message::SelectAll),
+                item(lbl_cut.clone(), Message::ContextCut),
+                item(lbl_copy.clone(), Message::ContextCopy),
+                item(lbl_paste.clone(), Message::ContextPaste),
+                item(lbl_delete.clone(), Message::ContextDelete),
+                fmt_sel_el,
+                fmt_all_el,
+            ];
             container(
-                column![
-                    item(lbl_select_all.clone(), Message::SelectAll),
-                    item(lbl_cut.clone(), Message::ContextCut),
-                    item(lbl_copy.clone(), Message::ContextCopy),
-                    item(lbl_paste.clone(), Message::ContextPaste),
-                    item(lbl_delete.clone(), Message::ContextDelete),
-                ]
-                .spacing(2)
-                .padding(6),
+                column(ctx_items).spacing(2).padding(6),
             )
             .style(crate::theme::card(dark))
             .into()
@@ -418,14 +570,80 @@ impl Application for TinctaApp {
         }
 
         // Status bar
+        let cursor = self.editor.content.cursor_position();
         let status_bar = crate::editor::statusbar::view(
             &self.status_message,
             &self.current_file,
             self.is_dirty,
             dark,
+            cursor,
+            self.status_is_error,
         );
 
-        let content = column![menu_bar, main_row, status_bar,]
+        // Error panel (shown when formatter reports an error)
+        let error_panel: Option<Element<Message>> = if self.show_error_panel {
+            if let Some(err) = &self.format_error {
+                let header = row![
+                    text(t!("panel.errors").to_string())
+                        .size(11)
+                        .style(tincta_theme::muted_text(dark)),
+                    iced::widget::Space::with_width(Length::Fill),
+                    button(text("✕").size(11).style(tincta_theme::muted_text(dark)))
+                        .padding([2, 6])
+                        .on_press(Message::CloseErrorPanel)
+                        .style(iced::theme::Button::custom(tincta_theme::GhostButton {
+                            dark,
+                            active: false,
+                        })),
+                ]
+                .padding([4, 10])
+                .align_items(iced::Alignment::Center);
+
+                let error_color = iced::Color::from_rgb(0.88, 0.27, 0.18);
+                let body = iced::widget::scrollable(
+                    container(
+                        text(err.clone())
+                            .size(12)
+                            .style(error_color)
+                            .font(iced::Font::MONOSPACE),
+                    )
+                    .padding([4, 12, 8, 12])
+                    .width(Length::Fill),
+                )
+                .height(Length::Fixed(100.0));
+
+                Some(
+                    container(column![header, body])
+                        .width(Length::Fill)
+                        .style(tincta_theme::error_panel(dark))
+                        .into(),
+                )
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Formatting banner shown above the editor while an async format is running
+        let mut col = if self.is_formatting {
+            let banner = container(
+                text(t!("status.formatting").to_string())
+                    .size(12)
+                    .style(tincta_theme::accent_color()),
+            )
+            .width(Length::Fill)
+            .padding([4, 14])
+            .style(tincta_theme::accent_banner(dark));
+            column![menu_bar, banner, main_row]
+        } else {
+            column![menu_bar, main_row]
+        };
+        if let Some(panel) = error_panel {
+            col = col.push(panel);
+        }
+        let content = col
+            .push(status_bar)
             .width(Length::Fill)
             .height(Length::Fill);
 
@@ -436,7 +654,10 @@ impl Application for TinctaApp {
 
         // Float the dropdown overlay on top — doesn't shift the layout.
         if let Some(menu) = self.open_menu {
-            let dropdown = crate::menu_bar::dropdown_view(menu, &self.config);
+            let has_fmt = self.editor.language.as_deref()
+                .map(|ext| crate::formatter::has_formatter(ext))
+                .unwrap_or(false);
+            let dropdown = crate::menu_bar::dropdown_view(menu, &self.config, has_fmt);
             let x = crate::menu_bar::dropdown_x_offset(menu);
             iced_aw::floating_element::FloatingElement::new(base, dropdown)
                 .anchor(iced_aw::floating_element::Anchor::NorthWest)
@@ -454,6 +675,14 @@ impl Application for TinctaApp {
             tincta_theme::ink_light()
         }
     }
+}
+
+pub fn untitled_path(n: u32) -> PathBuf {
+    PathBuf::from(format!("untitled://{}", n))
+}
+
+pub fn is_untitled(path: &PathBuf) -> bool {
+    path.to_str().map(|s| s.starts_with("untitled://")).unwrap_or(false)
 }
 
 async fn open_file() -> Result<(PathBuf, String), String> {

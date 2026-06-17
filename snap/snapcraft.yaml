@@ -1,5 +1,5 @@
 name: tincta
-version: '0.2.0'
+version: '0.3.0'
 summary: A fast, stable, cross-platform text editor
 description: |
   Tincta is a fast, stable text editor with syntax highlighting for 60+
@@ -21,6 +21,28 @@ parts:
       - libgtk-3-dev
       - libxkbcommon-dev
       - libvulkan-dev
+    stage-packages:
+      - libx11-6
+      - libxext6
+      - libxcursor1
+      - libxi6
+      - libxrandr2
+      - libxkbcommon0
+      - libxkbcommon-x11-0
+      - libgl1
+      - libegl1
+      - libvulkan1
+      - libwayland-client0
+      - libwayland-cursor0
+      - libwayland-egl1
+      - mesa-vulkan-drivers
+      - libgl1-mesa-dri
+      - libegl-mesa0
+      - libosmesa6
+      - xkb-data
+      - fonts-ubuntu
+      - fonts-dejavu-core
+      - libx11-data
 
   desktop-file:
     plugin: dump
@@ -29,12 +51,23 @@ parts:
       tincta.desktop: usr/share/applications/tincta.desktop
       tincta.png: usr/share/icons/hicolor/256x256/apps/tincta.png
 
+layout:
+  /usr/share/fonts:
+    bind: $SNAP/usr/share/fonts
+
 apps:
   tincta:
     command: bin/tincta
     desktop: usr/share/applications/tincta.desktop
     environment:
       WINIT_UNIX_BACKEND: x11
+      XKB_CONFIG_ROOT: $SNAP/usr/share/X11/xkb
+      __EGL_VENDOR_LIBRARY_DIRS: $SNAP/usr/share/glvnd/egl_vendor.d
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      GALLIUM_DRIVER: llvmpipe
+      LIBGL_DRIVERS_PATH: $SNAP/usr/lib/x86_64-linux-gnu/dri
+      MESA_LOADER_DRIVER_OVERRIDE: swrast
+      XLOCALEDIR: $SNAP/usr/share/X11/locale
     plugs:
       - home
       - removable-media

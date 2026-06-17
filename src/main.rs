@@ -19,6 +19,7 @@ mod preferences;
 mod search;
 mod sidebar;
 mod theme;
+mod formatter;
 
 i18n!("src/i18n");
 

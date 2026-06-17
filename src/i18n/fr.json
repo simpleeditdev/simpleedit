@@ -5,6 +5,7 @@
   "toolbar.light": "Clair",
   "sidebar.files": "FICHIERS",
   "sidebar.no_files": "Aucun fichier ouvert",
+  "sidebar.untitled": "Nouveau",
   "sidebar.close": "Fermer",
   "sidebar.save": "Enregistrer",
   "sidebar.save_as": "Enregistrer sous...",
@@ -52,5 +53,15 @@
   "ctx.cut": "Couper",
   "ctx.copy": "Copier",
   "ctx.paste": "Coller",
-  "ctx.delete": "Supprimer"
+  "ctx.delete": "Supprimer",
+  "menu.edit_format": "Formater le code",
+  "menu.view_line_numbers_show": "Afficher les numéros de ligne",
+  "menu.view_line_numbers_hide": "Masquer les numéros de ligne",
+  "panel.errors": "PROBLÈMES",
+  "ctx.format_selection": "Formater la sélection",
+  "ctx.format_all": "Tout formater",
+  "status.formatting": "Formatage en cours...",
+  "status.no_language": "Aucun langage détecté — enregistre le fichier avec une extension d'abord",
+  "status.formatted": "Code formaté",
+  "status.format_error": "Erreur de formatage"
 }

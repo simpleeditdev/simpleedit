@@ -1,6 +1,6 @@
 [package]
 name = "tincta"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "A fast, stable, cross-platform text editor"
 license = "MIT"

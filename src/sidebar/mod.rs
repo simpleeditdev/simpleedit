@@ -44,6 +44,14 @@ impl SidebarState {
         self.selected = self.files.iter().position(|p| p == &path);
     }
 
+    /// Replace an untitled slot with its real path after Save As.
+    pub fn rename_file(&mut self, old: &PathBuf, new: PathBuf) {
+        if let Some(pos) = self.files.iter().position(|p| p == old) {
+            self.files[pos] = new;
+            self.selected = Some(pos);
+        }
+    }
+
     pub fn update(&mut self, msg: SidebarMessage) -> SidebarAction {
         match msg {
             SidebarMessage::OpenFile(path) => {
@@ -76,11 +84,15 @@ impl SidebarState {
             .iter()
             .enumerate()
             .map(|(i, path)| {
-                let name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("?")
-                    .to_string();
+                let name = if crate::app::is_untitled(path) {
+                    let n = path.to_str().unwrap_or("").trim_start_matches("untitled://");
+                    format!("{} {}", t!("sidebar.untitled"), n)
+                } else {
+                    path.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("?")
+                        .to_string()
+                };
                 let is_selected = self.selected == Some(i);
                 let is_active = current_file.as_ref() == Some(path);
                 let path_clone = path.clone();

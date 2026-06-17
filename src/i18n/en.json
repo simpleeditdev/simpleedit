@@ -5,6 +5,7 @@
   "toolbar.light": "Light",
   "sidebar.files": "FILES",
   "sidebar.no_files": "No open files",
+  "sidebar.untitled": "New",
   "sidebar.close": "Close",
   "sidebar.save": "Save",
   "sidebar.save_as": "Save as...",
@@ -52,5 +53,15 @@
   "ctx.cut": "Cut",
   "ctx.copy": "Copy",
   "ctx.paste": "Paste",
-  "ctx.delete": "Delete"
+  "ctx.delete": "Delete",
+  "menu.edit_format": "Format Code",
+  "menu.view_line_numbers_show": "Show Line Numbers",
+  "menu.view_line_numbers_hide": "Hide Line Numbers",
+  "panel.errors": "PROBLEMS",
+  "ctx.format_selection": "Format Selection",
+  "ctx.format_all": "Format All",
+  "status.formatting": "Formatting...",
+  "status.no_language": "No language detected — save the file with an extension first",
+  "status.formatted": "Code formatted",
+  "status.format_error": "Format error"
 }
