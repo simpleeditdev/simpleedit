@@ -1,13 +1,13 @@
 use iced::{
     executor,
-    widget::{button, column, container, row, text, text_editor},
-    Application, Command, Element, Length, Theme,
+    widget::{button, column, container, row, scrollable, text, text_editor, text_input, Space},
+    Alignment, Application, Command, Element, Length, Theme,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::{
-    config::Config,
+    config::{Config, ShortcutConfig, ShortcutTarget},
     editor::EditorState,
     preferences::{PreferencesMessage, PreferencesState},
     search::{SearchMessage, SearchState},
@@ -21,6 +21,16 @@ pub enum TopMenu {
     Edit,
     View,
     Help,
+}
+
+/// Which modal overlay (if any) is currently shown.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ActiveOverlay {
+    None,
+    About,
+    GotoLine,
+    LanguagePicker,
+    Shortcuts { capturing: Option<ShortcutTarget> },
 }
 
 #[derive(Debug, Clone)]
@@ -39,7 +49,7 @@ pub enum Message {
     ToggleSearch,
     ToggleSidebar,
     TogglePreferences,
-    ThemeChanged(bool), // false = light, true = dark
+    ThemeChanged(bool),
     InsertTab,
     ToggleMenu(TopMenu),
     SelectAll,
@@ -55,6 +65,18 @@ pub enum Message {
     FileFormatted(Result<String, String>),
     SelectionFormatted(Result<String, String>),
     CloseErrorPanel,
+    // Raw key press forwarded from the subscription (non-capturing fn pointer)
+    KeyPressed { key: String, ctrl: bool, shift: bool, alt: bool },
+    EscapePressed,
+    // Overlays
+    CloseOverlay,
+    OpenGotoLine,
+    GotoLineInputChanged(String),
+    GotoLineSubmit,
+    OpenLanguagePicker,
+    SetLanguage(String),
+    OpenShortcuts,
+    StartCaptureShortcut(ShortcutTarget),
 }
 
 pub struct TinctaApp {
@@ -75,8 +97,9 @@ pub struct TinctaApp {
     format_error: Option<String>,
     show_error_panel: bool,
     untitled_counter: u32,
-    // In-memory cache of unsaved file states: path → (content, language, is_dirty)
     file_cache: HashMap<PathBuf, (String, Option<String>, bool)>,
+    overlay: ActiveOverlay,
+    goto_line_input: String,
 }
 
 impl Application for TinctaApp {
@@ -88,7 +111,6 @@ impl Application for TinctaApp {
     fn new(_flags: ()) -> (Self, Command<Message>) {
         let config = Config::load();
         let editor = EditorState::new();
-        // Start with one untitled file so the editor always has an identity
         let initial_path = untitled_path(1);
         let mut sidebar = SidebarState::new();
         sidebar.add_file(initial_path.clone());
@@ -112,6 +134,8 @@ impl Application for TinctaApp {
                 show_error_panel: false,
                 untitled_counter: 1,
                 file_cache: HashMap::new(),
+                overlay: ActiveOverlay::None,
+                goto_line_input: String::new(),
                 config,
             },
             Command::none(),
@@ -131,7 +155,6 @@ impl Application for TinctaApp {
     }
 
     fn update(&mut self, message: Message) -> Command<Message> {
-        // Any interaction except toggling a menu closes the open dropdown.
         if !matches!(&message, Message::ToggleMenu(_)) {
             self.open_menu = None;
         }
@@ -139,6 +162,71 @@ impl Application for TinctaApp {
         match message {
             Message::EditorAction(action) => {
                 let is_edit = action.is_edit();
+
+                // Auto-indent: replicate leading whitespace of current line on Enter
+                if self.config.auto_indent {
+                    if let text_editor::Action::Edit(text_editor::Edit::Enter) = &action {
+                        let raw = self.editor.content.text();
+                        let (line_idx, _) = self.editor.content.cursor_position();
+                        let indent: String = raw
+                            .lines()
+                            .nth(line_idx)
+                            .unwrap_or("")
+                            .chars()
+                            .take_while(|c| *c == ' ' || *c == '\t')
+                            .collect();
+                        self.editor.content.perform(text_editor::Action::Edit(text_editor::Edit::Enter));
+                        if !indent.is_empty() {
+                            self.editor.content.perform(text_editor::Action::Edit(
+                                text_editor::Edit::Paste(std::sync::Arc::new(indent)),
+                            ));
+                        }
+                        self.is_dirty = true;
+                        return Command::none();
+                    }
+                }
+
+                // Autocomplete brackets: ( → (), [ → [], { → {}
+                if self.config.autocomplete_brackets {
+                    if let text_editor::Action::Edit(text_editor::Edit::Insert(ch)) = &action {
+                        let pair = match ch {
+                            '(' => Some(')'),
+                            '[' => Some(']'),
+                            '{' => Some('}'),
+                            _ => None,
+                        };
+                        if let Some(close) = pair {
+                            self.editor.content.perform(action.clone());
+                            self.editor.content.perform(text_editor::Action::Edit(
+                                text_editor::Edit::Insert(close),
+                            ));
+                            self.editor.content.perform(text_editor::Action::Move(
+                                text_editor::Motion::Left,
+                            ));
+                            self.is_dirty = true;
+                            return Command::none();
+                        }
+                    }
+                }
+
+                // Autocomplete quotes: " → "", ' → '', ` → ``
+                if self.config.autocomplete_quotes {
+                    if let text_editor::Action::Edit(text_editor::Edit::Insert(ch)) = &action {
+                        if matches!(ch, '"' | '\'' | '`') {
+                            let c = *ch;
+                            self.editor.content.perform(action.clone());
+                            self.editor.content.perform(text_editor::Action::Edit(
+                                text_editor::Edit::Insert(c),
+                            ));
+                            self.editor.content.perform(text_editor::Action::Move(
+                                text_editor::Motion::Left,
+                            ));
+                            self.is_dirty = true;
+                            return Command::none();
+                        }
+                    }
+                }
+
                 self.editor.content.perform(action);
                 if is_edit {
                     self.is_dirty = true;
@@ -152,11 +240,9 @@ impl Application for TinctaApp {
                     } else {
                         "\t".to_string()
                     };
-                    self.editor
-                        .content
-                        .perform(text_editor::Action::Edit(text_editor::Edit::Paste(
-                            std::sync::Arc::new(text),
-                        )));
+                    self.editor.content.perform(text_editor::Action::Edit(
+                        text_editor::Edit::Paste(std::sync::Arc::new(text)),
+                    ));
                     self.is_dirty = true;
                 }
                 Command::none()
@@ -171,15 +257,10 @@ impl Application for TinctaApp {
                 Command::none()
             }
             Message::ToggleMenu(menu) => {
-                self.open_menu = if self.open_menu == Some(menu) {
-                    None
-                } else {
-                    Some(menu)
-                };
+                self.open_menu = if self.open_menu == Some(menu) { None } else { Some(menu) };
                 Command::none()
             }
             Message::NewFile => {
-                // Save current state before switching
                 if let Some(current) = self.current_file.clone() {
                     self.file_cache.insert(
                         current,
@@ -234,7 +315,6 @@ impl Application for TinctaApp {
                 match result {
                     Ok(path) => {
                         self.file_cache.remove(&path);
-                        // If saving an untitled file for the first time, replace its slot
                         if let Some(old) = &self.current_file {
                             if is_untitled(old) {
                                 self.file_cache.remove(old);
@@ -287,7 +367,6 @@ impl Application for TinctaApp {
                     if self.current_file.as_ref() == Some(&path) {
                         return Command::none();
                     }
-                    // Save current editor state before switching
                     if let Some(current) = self.current_file.clone() {
                         self.file_cache.insert(
                             current,
@@ -298,7 +377,6 @@ impl Application for TinctaApp {
                             ),
                         );
                     }
-                    // Restore from cache or load from disk
                     if let Some((content, language, dirty)) = self.file_cache.get(&path).cloned() {
                         self.editor = EditorState::from_content(&content);
                         self.editor.language = language;
@@ -339,7 +417,7 @@ impl Application for TinctaApp {
                 Command::none()
             }
             Message::About => {
-                self.status_message = format!("Tincta v{}", env!("CARGO_PKG_VERSION"));
+                self.overlay = ActiveOverlay::About;
                 Command::none()
             }
             Message::Quit => std::process::exit(0),
@@ -359,15 +437,11 @@ impl Application for TinctaApp {
                 }
                 Command::none()
             }
-            Message::ContextPaste => {
-                iced::clipboard::read(Message::ClipboardContent)
-            }
+            Message::ContextPaste => iced::clipboard::read(Message::ClipboardContent),
             Message::ClipboardContent(Some(text)) => {
-                self.editor
-                    .content
-                    .perform(text_editor::Action::Edit(text_editor::Edit::Paste(
-                        std::sync::Arc::new(text),
-                    )));
+                self.editor.content.perform(text_editor::Action::Edit(
+                    text_editor::Edit::Paste(std::sync::Arc::new(text)),
+                ));
                 self.is_dirty = true;
                 Command::none()
             }
@@ -449,47 +523,159 @@ impl Application for TinctaApp {
                 self.show_error_panel = false;
                 Command::none()
             }
+            // --- Overlays ---
+            Message::CloseOverlay => {
+                self.overlay = ActiveOverlay::None;
+                Command::none()
+            }
+            Message::OpenGotoLine => {
+                self.goto_line_input = String::new();
+                self.overlay = ActiveOverlay::GotoLine;
+                Command::none()
+            }
+            Message::GotoLineInputChanged(s) => {
+                // Allow only digits
+                self.goto_line_input = s.chars().filter(|c| c.is_ascii_digit()).collect();
+                Command::none()
+            }
+            Message::GotoLineSubmit => {
+                if let Ok(n) = self.goto_line_input.parse::<usize>() {
+                    let target = n.saturating_sub(1); // 0-indexed
+                    let max = self.editor.content.line_count().saturating_sub(1);
+                    let target = target.min(max);
+                    self.editor
+                        .content
+                        .perform(text_editor::Action::Move(text_editor::Motion::DocumentStart));
+                    for _ in 0..target {
+                        self.editor
+                            .content
+                            .perform(text_editor::Action::Move(text_editor::Motion::Down));
+                    }
+                    self.editor
+                        .content
+                        .perform(text_editor::Action::Move(text_editor::Motion::Home));
+                }
+                self.overlay = ActiveOverlay::None;
+                Command::none()
+            }
+            Message::OpenLanguagePicker => {
+                self.overlay = ActiveOverlay::LanguagePicker;
+                Command::none()
+            }
+            Message::SetLanguage(ext) => {
+                self.editor.language = if ext.is_empty() { None } else { Some(ext) };
+                self.overlay = ActiveOverlay::None;
+                Command::none()
+            }
+            Message::OpenShortcuts => {
+                self.overlay = ActiveOverlay::Shortcuts { capturing: None };
+                Command::none()
+            }
+            Message::StartCaptureShortcut(target) => {
+                self.overlay = ActiveOverlay::Shortcuts { capturing: Some(target) };
+                Command::none()
+            }
+            // Raw key forwarded from the subscription fn pointer
+            Message::KeyPressed { key, ctrl, shift, alt } => {
+                // In shortcut capture mode: save the new binding
+                if let ActiveOverlay::Shortcuts { capturing: Some(target) } = &self.overlay {
+                    let target = *target;
+                    let sc = ShortcutConfig { ctrl, shift, alt, key };
+                    match target {
+                        ShortcutTarget::NewFile => self.config.shortcuts.new_file = sc,
+                        ShortcutTarget::OpenFile => self.config.shortcuts.open_file = sc,
+                        ShortcutTarget::SaveFile => self.config.shortcuts.save_file = sc,
+                        ShortcutTarget::SaveAs => self.config.shortcuts.save_as = sc,
+                        ShortcutTarget::CloseFile => self.config.shortcuts.close_file = sc,
+                        ShortcutTarget::Find => self.config.shortcuts.find = sc,
+                        ShortcutTarget::SelectAll => self.config.shortcuts.select_all = sc,
+                        ShortcutTarget::FormatCode => self.config.shortcuts.format_code = sc,
+                        ShortcutTarget::GotoLine => self.config.shortcuts.goto_line = sc,
+                        ShortcutTarget::ToggleSidebar => self.config.shortcuts.toggle_sidebar = sc,
+                        ShortcutTarget::Quit => self.config.shortcuts.quit = sc,
+                    }
+                    self.config.save();
+                    self.overlay = ActiveOverlay::Shortcuts { capturing: None };
+                    return Command::none();
+                }
+                // Don't fire shortcuts while any overlay is open
+                if !matches!(self.overlay, ActiveOverlay::None) {
+                    return Command::none();
+                }
+                // Match against config shortcuts
+                let sc_check = |s: &ShortcutConfig| -> bool {
+                    s.key.eq_ignore_ascii_case(&key) && s.ctrl == ctrl && s.shift == shift && s.alt == alt
+                };
+                let sh = &self.config.shortcuts;
+                let msg = if sc_check(&sh.save_as) { Some(Message::SaveFileAs) }
+                    else if sc_check(&sh.new_file) { Some(Message::NewFile) }
+                    else if sc_check(&sh.save_file) { Some(Message::SaveFile) }
+                    else if sc_check(&sh.open_file) { Some(Message::OpenFile) }
+                    else if sc_check(&sh.close_file) { Some(Message::CloseFile) }
+                    else if sc_check(&sh.find) { Some(Message::ToggleSearch) }
+                    else if sc_check(&sh.select_all) { Some(Message::SelectAll) }
+                    else if sc_check(&sh.format_code) { Some(Message::FormatFile) }
+                    else if sc_check(&sh.goto_line) { Some(Message::OpenGotoLine) }
+                    else if sc_check(&sh.toggle_sidebar) { Some(Message::ToggleSidebar) }
+                    else if sc_check(&sh.quit) { Some(Message::Quit) }
+                    else { None };
+                if let Some(m) = msg { self.update(m) } else { Command::none() }
+            }
+            Message::EscapePressed => {
+                if !matches!(self.overlay, ActiveOverlay::None) {
+                    self.overlay = ActiveOverlay::None;
+                }
+                Command::none()
+            }
         }
     }
 
     fn subscription(&self) -> iced::Subscription<Message> {
+        // on_key_press requires a fn pointer (no captures), so we forward raw key info
+        // as Message::KeyPressed / EscapePressed and dispatch in update().
         iced::keyboard::on_key_press(|key, modifiers| {
-            use iced::keyboard::{key::Named, Key, Modifiers};
+            use iced::keyboard::{key::Named, Key};
 
-            // Tab: insert tab/spaces (no modifier needed)
+            if key == Key::Named(Named::Escape) {
+                return Some(Message::EscapePressed);
+            }
             if key == Key::Named(Named::Tab) {
                 return Some(Message::InsertTab);
             }
 
-            let cmd = modifiers.command(); // Ctrl on Linux/Windows, Cmd on macOS
-            if !cmd {
-                return None;
-            }
+            let key_str = match key.as_ref() {
+                Key::Character(c) => c.to_lowercase(),
+                Key::Named(Named::Enter) => "Return".to_string(),
+                Key::Named(Named::F1) => "F1".to_string(),
+                Key::Named(Named::F2) => "F2".to_string(),
+                Key::Named(Named::F3) => "F3".to_string(),
+                Key::Named(Named::F4) => "F4".to_string(),
+                Key::Named(Named::F5) => "F5".to_string(),
+                Key::Named(Named::F6) => "F6".to_string(),
+                Key::Named(Named::F7) => "F7".to_string(),
+                Key::Named(Named::F8) => "F8".to_string(),
+                Key::Named(Named::F9) => "F9".to_string(),
+                Key::Named(Named::F10) => "F10".to_string(),
+                Key::Named(Named::F11) => "F11".to_string(),
+                Key::Named(Named::F12) => "F12".to_string(),
+                _ => return None,
+            };
 
-            match key.as_ref() {
-                Key::Character("a") => Some(Message::SelectAll),
-                Key::Character("s") if modifiers.shift() => Some(Message::SaveFileAs),
-                Key::Character("s") => Some(Message::SaveFile),
-                Key::Character("n") => Some(Message::NewFile),
-                Key::Character("o") => Some(Message::OpenFile),
-                Key::Character("w") => Some(Message::CloseFile),
-                Key::Character("f") => Some(Message::ToggleSearch),
-                // Ctrl+C/X/V are handled internally by text_editor when focused;
-                // use the right-click context menu when the editor is not focused.
-                _ => None,
-            }
+            Some(Message::KeyPressed {
+                key: key_str,
+                ctrl: modifiers.command(),
+                shift: modifiers.shift(),
+                alt: modifiers.alt(),
+            })
         })
     }
 
     fn view(&self) -> Element<Message> {
         let dark = self.config.dark_mode;
 
-        // Menu bar (Fichier / Édition / Affichage / Aide)
         let menu_bar = crate::menu_bar::view(&self.config, self.open_menu);
 
-        // Editor with right-click context menu
         let editor_widget = self.editor.view(&self.config);
-        // Pre-compute labels as owned Strings so they can be moved into the 'static closure.
         let lbl_select_all = t!("ctx.select_all").to_string();
         let lbl_cut = t!("ctx.cut").to_string();
         let lbl_copy = t!("ctx.copy").to_string();
@@ -497,7 +683,10 @@ impl Application for TinctaApp {
         let lbl_delete = t!("ctx.delete").to_string();
         let lbl_format_sel = t!("ctx.format_selection").to_string();
         let lbl_format_all = t!("ctx.format_all").to_string();
-        let has_fmt_ctx = self.editor.language.as_deref()
+        let has_fmt_ctx = self
+            .editor
+            .language
+            .as_deref()
             .map(|ext| crate::formatter::has_formatter(ext))
             .unwrap_or(false);
         let has_sel_ctx = self.editor.content.selection().is_some();
@@ -538,28 +727,23 @@ impl Application for TinctaApp {
                 fmt_sel_el,
                 fmt_all_el,
             ];
-            container(
-                column(ctx_items).spacing(2).padding(6),
-            )
-            .style(crate::theme::card(dark))
-            .into()
+            container(column(ctx_items).spacing(2).padding(6))
+                .style(crate::theme::card(dark))
+                .into()
         });
 
-        // Search panel (conditionally shown)
         let search_panel = if self.show_search {
             Some(self.search.view(dark))
         } else {
             None
         };
 
-        // Main content area
         let editor_area: Element<Message> = if let Some(search) = search_panel {
             column![search, editor_with_context].into()
         } else {
             editor_with_context.into()
         };
 
-        // Sidebar (conditionally shown)
         let mut main_row = row![];
         if self.show_sidebar {
             main_row = main_row.push(self.sidebar.view(dark, &self.current_file));
@@ -569,7 +753,6 @@ impl Application for TinctaApp {
             main_row = main_row.push(self.preferences.view(dark));
         }
 
-        // Status bar
         let cursor = self.editor.content.cursor_position();
         let status_bar = crate::editor::statusbar::view(
             &self.status_message,
@@ -580,14 +763,13 @@ impl Application for TinctaApp {
             self.status_is_error,
         );
 
-        // Error panel (shown when formatter reports an error)
         let error_panel: Option<Element<Message>> = if self.show_error_panel {
             if let Some(err) = &self.format_error {
                 let header = row![
                     text(t!("panel.errors").to_string())
                         .size(11)
                         .style(tincta_theme::muted_text(dark)),
-                    iced::widget::Space::with_width(Length::Fill),
+                    Space::with_width(Length::Fill),
                     button(text("✕").size(11).style(tincta_theme::muted_text(dark)))
                         .padding([2, 6])
                         .on_press(Message::CloseErrorPanel)
@@ -597,10 +779,10 @@ impl Application for TinctaApp {
                         })),
                 ]
                 .padding([4, 10])
-                .align_items(iced::Alignment::Center);
+                .align_items(Alignment::Center);
 
                 let error_color = iced::Color::from_rgb(0.88, 0.27, 0.18);
-                let body = iced::widget::scrollable(
+                let body = scrollable(
                     container(
                         text(err.clone())
                             .size(12)
@@ -625,7 +807,6 @@ impl Application for TinctaApp {
             None
         };
 
-        // Formatting banner shown above the editor while an async format is running
         let mut col = if self.is_formatting {
             let banner = container(
                 text(t!("status.formatting").to_string())
@@ -642,29 +823,67 @@ impl Application for TinctaApp {
         if let Some(panel) = error_panel {
             col = col.push(panel);
         }
-        let content = col
-            .push(status_bar)
-            .width(Length::Fill)
-            .height(Length::Fill);
+        let content = col.push(status_bar).width(Length::Fill).height(Length::Fill);
 
+        // Base layout wrapped in a container
         let base: Element<Message> = container(content)
             .width(Length::Fill)
             .height(Length::Fill)
             .into();
 
-        // Float the dropdown overlay on top — doesn't shift the layout.
-        if let Some(menu) = self.open_menu {
-            let has_fmt = self.editor.language.as_deref()
+        // Floating dropdown (menu bar)
+        let with_dropdown: Element<Message> = if let Some(menu) = self.open_menu {
+            let has_fmt = self
+                .editor
+                .language
+                .as_deref()
                 .map(|ext| crate::formatter::has_formatter(ext))
                 .unwrap_or(false);
-            let dropdown = crate::menu_bar::dropdown_view(menu, &self.config, has_fmt);
+            let lang_override_enabled = self.language_picker_enabled();
+            let dropdown = crate::menu_bar::dropdown_view(menu, &self.config, has_fmt, lang_override_enabled);
             let x = crate::menu_bar::dropdown_x_offset(menu);
             iced_aw::floating_element::FloatingElement::new(base, dropdown)
                 .anchor(iced_aw::floating_element::Anchor::NorthWest)
-                .offset(iced_aw::floating_element::Offset { x, y: crate::menu_bar::BAR_HEIGHT })
+                .offset(iced_aw::floating_element::Offset {
+                    x,
+                    y: crate::menu_bar::BAR_HEIGHT,
+                })
                 .into()
         } else {
             base
+        };
+
+        // Modal overlays
+        match &self.overlay {
+            ActiveOverlay::None => with_dropdown,
+            ActiveOverlay::About => {
+                let overlay = self.view_about_overlay(dark);
+                iced_aw::Modal::new(with_dropdown, Some(overlay))
+                    .backdrop(Message::CloseOverlay)
+                    .on_esc(Message::CloseOverlay)
+                    .into()
+            }
+            ActiveOverlay::GotoLine => {
+                let overlay = self.view_goto_line_overlay(dark);
+                iced_aw::Modal::new(with_dropdown, Some(overlay))
+                    .backdrop(Message::CloseOverlay)
+                    .on_esc(Message::CloseOverlay)
+                    .into()
+            }
+            ActiveOverlay::LanguagePicker => {
+                let overlay = self.view_language_picker_overlay(dark);
+                iced_aw::Modal::new(with_dropdown, Some(overlay))
+                    .backdrop(Message::CloseOverlay)
+                    .on_esc(Message::CloseOverlay)
+                    .into()
+            }
+            ActiveOverlay::Shortcuts { capturing } => {
+                let overlay = self.view_shortcuts_overlay(dark, *capturing);
+                iced_aw::Modal::new(with_dropdown, Some(overlay))
+                    .backdrop(Message::CloseOverlay)
+                    .on_esc(Message::CloseOverlay)
+                    .into()
+            }
         }
     }
 
@@ -677,6 +896,254 @@ impl Application for TinctaApp {
     }
 }
 
+// ─── Overlay views ──────────────────────────────────────────────────────────
+
+impl TinctaApp {
+    fn language_picker_enabled(&self) -> bool {
+        match &self.current_file {
+            None => true,
+            Some(path) => {
+                if is_untitled(path) {
+                    return true;
+                }
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                // Enabled if the extension is NOT recognized (user must override)
+                !crate::editor::SUPPORTED_LANGUAGES.iter().any(|(tok, _)| *tok == ext)
+            }
+        }
+    }
+
+    fn view_about_overlay(&self, dark: bool) -> Element<Message> {
+        let p = tincta_theme::palette(dark);
+        let version = env!("CARGO_PKG_VERSION");
+        container(
+            column![
+                text("Tincta").size(24).style(p.accent),
+                text(format!("v{}", version)).size(15).style(p.text),
+                text(t!("about.tagline").to_string()).size(12).style(p.muted),
+                button(text(t!("about.close").to_string()).size(13))
+                    .padding([8, 24])
+                    .on_press(Message::CloseOverlay)
+                    .style(iced::theme::Button::custom(tincta_theme::GhostButton {
+                        dark,
+                        active: true,
+                    })),
+            ]
+            .spacing(12)
+            .align_items(Alignment::Center)
+            .padding(36),
+        )
+        .width(320)
+        .style(tincta_theme::card(dark))
+        .into()
+    }
+
+    fn view_goto_line_overlay(&self, dark: bool) -> Element<Message> {
+        let p = tincta_theme::palette(dark);
+        container(
+            column![
+                text(t!("goto_line.title").to_string()).size(14).style(p.text),
+                text_input(&t!("goto_line.placeholder").to_string(), &self.goto_line_input)
+                    .on_input(Message::GotoLineInputChanged)
+                    .on_submit(Message::GotoLineSubmit)
+                    .padding(8)
+                    .size(14),
+                row![
+                    button(text(t!("goto_line.cancel").to_string()).size(13))
+                        .padding([7, 16])
+                        .on_press(Message::CloseOverlay)
+                        .style(iced::theme::Button::custom(tincta_theme::GhostButton {
+                            dark,
+                            active: false,
+                        })),
+                    Space::with_width(Length::Fill),
+                    button(text(t!("goto_line.go").to_string()).size(13))
+                        .padding([7, 16])
+                        .on_press(Message::GotoLineSubmit)
+                        .style(iced::theme::Button::custom(tincta_theme::GhostButton {
+                            dark,
+                            active: true,
+                        })),
+                ]
+                .align_items(Alignment::Center),
+            ]
+            .spacing(14)
+            .padding(24),
+        )
+        .width(320)
+        .style(tincta_theme::card(dark))
+        .into()
+    }
+
+    fn view_language_picker_overlay(&self, dark: bool) -> Element<Message> {
+        let p = tincta_theme::palette(dark);
+        let current_lang = self.editor.language.as_deref().unwrap_or("");
+
+        let mut items: Vec<Element<Message>> = vec![
+            // "None / auto" row
+            button(
+                row![
+                    text(t!("language.auto").to_string()).size(13),
+                    Space::with_width(Length::Fill),
+                    if current_lang.is_empty() {
+                        text("✓").size(13).style(p.accent)
+                    } else {
+                        text("").size(13)
+                    },
+                ]
+                .align_items(Alignment::Center),
+            )
+            .padding([6, 12])
+            .width(Length::Fill)
+            .on_press(Message::SetLanguage(String::new()))
+            .style(iced::theme::Button::custom(tincta_theme::GhostButton {
+                dark,
+                active: current_lang.is_empty(),
+            }))
+            .into(),
+        ];
+
+        for (token, name) in crate::editor::SUPPORTED_LANGUAGES {
+            let is_current = current_lang == *token;
+            items.push(
+                button(
+                    row![
+                        text(*name).size(13),
+                        Space::with_width(Length::Fill),
+                        if is_current {
+                            text("✓").size(13).style(p.accent)
+                        } else {
+                            text("").size(13)
+                        },
+                    ]
+                    .align_items(Alignment::Center),
+                )
+                .padding([6, 12])
+                .width(Length::Fill)
+                .on_press(Message::SetLanguage(token.to_string()))
+                .style(iced::theme::Button::custom(tincta_theme::GhostButton {
+                    dark,
+                    active: is_current,
+                }))
+                .into(),
+            );
+        }
+
+        container(
+            column![
+                text(t!("language.title").to_string()).size(14).style(p.text),
+                scrollable(column(items).spacing(2).padding(4))
+                    .height(Length::Fixed(320.0)),
+            ]
+            .spacing(10)
+            .padding(16),
+        )
+        .width(260)
+        .style(tincta_theme::card(dark))
+        .into()
+    }
+
+    fn view_shortcuts_overlay(
+        &self,
+        dark: bool,
+        capturing: Option<ShortcutTarget>,
+    ) -> Element<Message> {
+        let p = tincta_theme::palette(dark);
+        let sc = &self.config.shortcuts;
+
+        let rows_data: Vec<(ShortcutTarget, String, &crate::config::ShortcutConfig)> = vec![
+            (ShortcutTarget::NewFile, t!("shortcuts.new_file").to_string(), &sc.new_file),
+            (ShortcutTarget::OpenFile, t!("shortcuts.open_file").to_string(), &sc.open_file),
+            (ShortcutTarget::SaveFile, t!("shortcuts.save_file").to_string(), &sc.save_file),
+            (ShortcutTarget::SaveAs, t!("shortcuts.save_as").to_string(), &sc.save_as),
+            (ShortcutTarget::CloseFile, t!("shortcuts.close_file").to_string(), &sc.close_file),
+            (ShortcutTarget::Find, t!("shortcuts.find").to_string(), &sc.find),
+            (ShortcutTarget::SelectAll, t!("shortcuts.select_all").to_string(), &sc.select_all),
+            (ShortcutTarget::FormatCode, t!("shortcuts.format_code").to_string(), &sc.format_code),
+            (ShortcutTarget::GotoLine, t!("shortcuts.goto_line").to_string(), &sc.goto_line),
+            (ShortcutTarget::ToggleSidebar, t!("shortcuts.toggle_sidebar").to_string(), &sc.toggle_sidebar),
+            (ShortcutTarget::Quit, t!("shortcuts.quit").to_string(), &sc.quit),
+        ];
+
+        let mut rows: Vec<Element<Message>> = vec![
+            row![
+                text(t!("shortcuts.action").to_string()).size(11).style(p.muted),
+                Space::with_width(Length::Fill),
+                text(t!("shortcuts.key").to_string()).size(11).style(p.muted),
+            ]
+            .padding([4, 12])
+            .into(),
+        ];
+
+        for (target, label_str, shortcut) in &rows_data {
+            let target = *target;
+            let is_capturing = capturing == Some(target);
+            let key_label = if is_capturing {
+                t!("shortcuts.capturing").to_string()
+            } else {
+                shortcut.display()
+            };
+
+            let sc_btn = button(
+                text(key_label)
+                    .size(12)
+                    .style(if is_capturing { p.accent } else { p.text })
+                    .font(iced::Font::MONOSPACE),
+            )
+            .padding([4, 10])
+            .on_press(Message::StartCaptureShortcut(target))
+            .style(iced::theme::Button::custom(tincta_theme::GhostButton {
+                dark,
+                active: is_capturing,
+            }));
+
+            rows.push(
+                row![
+                    text(label_str.clone()).size(13).style(p.text),
+                    Space::with_width(Length::Fill),
+                    sc_btn,
+                ]
+                .padding([3, 12])
+                .align_items(Alignment::Center)
+                .into(),
+            );
+        }
+
+        let hint = if capturing.is_some() {
+            t!("shortcuts.capturing").to_string()
+        } else {
+            t!("shortcuts.click_to_rebind").to_string()
+        };
+
+        container(
+            column![
+                row![
+                    text(t!("shortcuts.title").to_string()).size(14).style(p.text),
+                    Space::with_width(Length::Fill),
+                    button(text("✕").size(12))
+                        .padding([4, 8])
+                        .on_press(Message::CloseOverlay)
+                        .style(iced::theme::Button::custom(tincta_theme::GhostButton {
+                            dark,
+                            active: false,
+                        })),
+                ]
+                .align_items(Alignment::Center),
+                scrollable(column(rows).spacing(2))
+                    .height(Length::Fixed(380.0)),
+                text(hint).size(11).style(p.muted),
+            ]
+            .spacing(10)
+            .padding(20),
+        )
+        .width(400)
+        .style(tincta_theme::card(dark))
+        .into()
+    }
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
 pub fn untitled_path(n: u32) -> PathBuf {
     PathBuf::from(format!("untitled://{}", n))
 }
@@ -684,6 +1151,8 @@ pub fn untitled_path(n: u32) -> PathBuf {
 pub fn is_untitled(path: &PathBuf) -> bool {
     path.to_str().map(|s| s.starts_with("untitled://")).unwrap_or(false)
 }
+
+// ─── File I/O ────────────────────────────────────────────────────────────────
 
 async fn open_file() -> Result<(PathBuf, String), String> {
     let handle = rfd::AsyncFileDialog::new()
@@ -723,9 +1192,7 @@ async fn open_file() -> Result<(PathBuf, String), String> {
         .ok_or_else(|| "cancelled".to_string())?;
 
     let path = handle.path().to_path_buf();
-    let content =
-        std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-
+    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     Ok((path, content))
 }
 

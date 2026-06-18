@@ -1,5 +1,34 @@
 pub mod highlighter;
 
+/// All (token, display_name) pairs recognized by the syntax highlighter.
+pub const SUPPORTED_LANGUAGES: &[(&str, &str)] = &[
+    ("rs", "Rust"),
+    ("py", "Python"),
+    ("js", "JavaScript"),
+    ("ts", "TypeScript"),
+    ("jsx", "JSX"),
+    ("tsx", "TSX"),
+    ("html", "HTML"),
+    ("css", "CSS"),
+    ("json", "JSON"),
+    ("toml", "TOML"),
+    ("yaml", "YAML"),
+    ("md", "Markdown"),
+    ("sh", "Shell"),
+    ("c", "C"),
+    ("cpp", "C++"),
+    ("java", "Java"),
+    ("go", "Go"),
+    ("rb", "Ruby"),
+    ("php", "PHP"),
+    ("swift", "Swift"),
+    ("kt", "Kotlin"),
+    ("xml", "XML"),
+    ("sql", "SQL"),
+    ("lua", "Lua"),
+    ("r", "R"),
+];
+
 use iced::{
     widget::{container, row, text, text_editor},
     Element, Font, Length,

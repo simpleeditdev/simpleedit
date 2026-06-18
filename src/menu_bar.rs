@@ -1,10 +1,10 @@
 use iced::{
     widget::{button, column, container, row, text, Space},
-    Element, Length,
+    Alignment, Element, Length,
 };
 
 use crate::app::{Message, TopMenu};
-use crate::config::Config;
+use crate::config::{Config, ShortcutConfig};
 use crate::preferences::PreferencesMessage;
 use crate::theme;
 
@@ -38,17 +38,20 @@ pub fn view(config: &Config, open: Option<TopMenu>) -> Element<'static, Message>
     container(bar).width(Length::Fill).style(theme::bar(dark)).into()
 }
 
-/// The floating dropdown panel for the active menu. Call only when a menu is open.
-pub fn dropdown_view(menu: TopMenu, config: &Config, has_formatter: bool) -> Element<'static, Message> {
-    let items = menu_items(menu, config, has_formatter);
-    container(column(items).spacing(2).padding(6).width(220))
+/// The floating dropdown panel for the active menu.
+pub fn dropdown_view(
+    menu: TopMenu,
+    config: &Config,
+    has_formatter: bool,
+    lang_picker_enabled: bool,
+) -> Element<'static, Message> {
+    let items = menu_items(menu, config, has_formatter, lang_picker_enabled);
+    container(column(items).spacing(2).padding(6).width(260))
         .style(theme::card(config.dark_mode))
         .into()
 }
 
-/// Approximate x position (px from window left) of each menu button.
-/// Used to anchor the floating dropdown below the right button.
-/// Bar left padding = 10. Button padding = [6, 12]. Size-13 font.
+/// x offset (px from window left) for each dropdown.
 pub fn dropdown_x_offset(menu: TopMenu) -> f32 {
     match menu {
         TopMenu::File => 10.0,
@@ -58,11 +61,28 @@ pub fn dropdown_x_offset(menu: TopMenu) -> f32 {
     }
 }
 
-/// Approximate height of the menu bar row (px). Used as the y offset for the dropdown.
 pub const BAR_HEIGHT: f32 = 38.0;
 
-fn item(label: String, dark: bool, message: Message) -> Element<'static, Message> {
-    button(text(label).size(13))
+/// A clickable menu item with an optional shortcut hint on the right.
+fn item(
+    label: String,
+    shortcut: Option<String>,
+    dark: bool,
+    message: Message,
+) -> Element<'static, Message> {
+    let content: Element<'static, Message> = if let Some(sc) = shortcut {
+        row![
+            text(label).size(13),
+            Space::with_width(Length::Fill),
+            text(sc).size(11).style(theme::muted_text(dark)),
+        ]
+        .align_items(Alignment::Center)
+        .into()
+    } else {
+        text(label).size(13).into()
+    };
+
+    button(content)
         .padding([6, 10])
         .width(Length::Fill)
         .on_press(message)
@@ -74,87 +94,81 @@ fn item(label: String, dark: bool, message: Message) -> Element<'static, Message
 }
 
 fn disabled_item(label: String, dark: bool) -> Element<'static, Message> {
-    container(
-        text(label).size(13).style(crate::theme::muted_text(dark))
-    )
-    .padding([6, 10])
-    .width(Length::Fill)
-    .into()
+    container(text(label).size(13).style(theme::muted_text(dark)))
+        .padding([6, 10])
+        .width(Length::Fill)
+        .into()
 }
 
-fn menu_items(menu: TopMenu, config: &Config, has_formatter: bool) -> Vec<Element<'static, Message>> {
+fn sc(sc: &ShortcutConfig) -> Option<String> {
+    Some(sc.display())
+}
+
+fn menu_items(
+    menu: TopMenu,
+    config: &Config,
+    has_formatter: bool,
+    lang_picker_enabled: bool,
+) -> Vec<Element<'static, Message>> {
     let dark = config.dark_mode;
+    let sh = &config.shortcuts;
     match menu {
         TopMenu::File => vec![
-            item(t!("menu.file_new").to_string(), dark, Message::NewFile),
-            item(t!("menu.file_open").to_string(), dark, Message::OpenFile),
-            item(t!("menu.file_save").to_string(), dark, Message::SaveFile),
-            item(
-                t!("menu.file_save_as").to_string(),
-                dark,
-                Message::SaveFileAs,
-            ),
-            item(
-                t!("menu.file_close").to_string(),
-                dark,
-                Message::CloseFile,
-            ),
-            item(t!("menu.file_quit").to_string(), dark, Message::Quit),
+            item(t!("menu.file_new").to_string(), sc(&sh.new_file), dark, Message::NewFile),
+            item(t!("menu.file_open").to_string(), sc(&sh.open_file), dark, Message::OpenFile),
+            item(t!("menu.file_save").to_string(), sc(&sh.save_file), dark, Message::SaveFile),
+            item(t!("menu.file_save_as").to_string(), sc(&sh.save_as), dark, Message::SaveFileAs),
+            item(t!("menu.file_close").to_string(), sc(&sh.close_file), dark, Message::CloseFile),
+            item(t!("menu.file_quit").to_string(), sc(&sh.quit), dark, Message::Quit),
         ],
         TopMenu::Edit => {
             let format_item: Element<'static, Message> = if has_formatter {
-                item(t!("menu.edit_format").to_string(), dark, Message::FormatFile)
+                item(t!("menu.edit_format").to_string(), sc(&sh.format_code), dark, Message::FormatFile)
             } else {
                 disabled_item(t!("menu.edit_format").to_string(), dark)
             };
             vec![
-                item(
-                    t!("menu.edit_select_all").to_string(),
-                    dark,
-                    Message::SelectAll,
-                ),
-                item(
-                    t!("menu.edit_find").to_string(),
-                    dark,
-                    Message::ToggleSearch,
-                ),
+                item(t!("menu.edit_select_all").to_string(), sc(&sh.select_all), dark, Message::SelectAll),
+                item(t!("menu.edit_find").to_string(), sc(&sh.find), dark, Message::ToggleSearch),
+                item(t!("menu.edit_goto_line").to_string(), sc(&sh.goto_line), dark, Message::OpenGotoLine),
                 format_item,
-                item(
-                    t!("menu.edit_preferences").to_string(),
-                    dark,
-                    Message::TogglePreferences,
-                ),
+                item(t!("menu.edit_preferences").to_string(), None, dark, Message::TogglePreferences),
             ]
         }
-        TopMenu::View => vec![
-            item(
-                t!("menu.view_sidebar").to_string(),
-                dark,
-                Message::ToggleSidebar,
-            ),
-            item(
-                if dark {
-                    t!("toolbar.light").to_string()
-                } else {
-                    t!("toolbar.dark").to_string()
-                },
-                dark,
-                Message::ThemeChanged(!dark),
-            ),
-            item(
-                if config.show_line_numbers {
-                    t!("menu.view_line_numbers_hide").to_string()
-                } else {
-                    t!("menu.view_line_numbers_show").to_string()
-                },
-                dark,
-                Message::Preferences(PreferencesMessage::ShowLineNumbersToggled(!config.show_line_numbers)),
-            ),
+        TopMenu::View => {
+            let lang_item: Element<'static, Message> = if lang_picker_enabled {
+                item(t!("menu.view_language").to_string(), None, dark, Message::OpenLanguagePicker)
+            } else {
+                disabled_item(t!("menu.view_language").to_string(), dark)
+            };
+            vec![
+                item(t!("menu.view_sidebar").to_string(), sc(&sh.toggle_sidebar), dark, Message::ToggleSidebar),
+                item(
+                    if config.dark_mode {
+                        t!("toolbar.light").to_string()
+                    } else {
+                        t!("toolbar.dark").to_string()
+                    },
+                    None,
+                    dark,
+                    Message::ThemeChanged(!config.dark_mode),
+                ),
+                item(
+                    if config.show_line_numbers {
+                        t!("menu.view_line_numbers_hide").to_string()
+                    } else {
+                        t!("menu.view_line_numbers_show").to_string()
+                    },
+                    None,
+                    dark,
+                    Message::Preferences(PreferencesMessage::ShowLineNumbersToggled(!config.show_line_numbers)),
+                ),
+                lang_item,
+            ]
+        }
+        TopMenu::Help => vec![
+            item(t!("menu.help_about").to_string(), None, dark, Message::About),
+            item(t!("menu.help_shortcuts").to_string(), None, dark, Message::OpenShortcuts),
         ],
-        TopMenu::Help => vec![item(
-            t!("menu.help_about").to_string(),
-            dark,
-            Message::About,
-        )],
     }
 }
