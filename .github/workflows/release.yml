@@ -77,20 +77,6 @@ jobs:
             tincta-*.tar.gz
             *.deb
 
-  build-snap:
-    name: Build & Publish Snap
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: snapcore/action-build@v1
-        id: build-snap
-      - uses: snapcore/action-publish@v1
-        env:
-          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
-        with:
-          snap: ${{ steps.build-snap.outputs.snap }}
-          release: stable
-
   release:
     name: Create GitHub Release
     needs: [build-macos, build-linux]

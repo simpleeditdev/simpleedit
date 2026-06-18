@@ -33,14 +33,8 @@ brew install tincta-v2
 ### Ubuntu / Debian — .deb
 
 ```bash
-wget https://github.com/sindus/tincta-V2/releases/latest/download/tincta_0.4.0_amd64.deb
-sudo dpkg -i tincta_0.4.0_amd64.deb
-```
-
-### Linux — Snap
-
-```bash
-sudo snap install tincta
+wget https://github.com/sindus/tincta-V2/releases/latest/download/tincta_0.5.1-1_amd64.deb
+sudo dpkg -i tincta_0.5.1-1_amd64.deb
 ```
 
 ### Build from source
