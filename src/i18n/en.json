@@ -19,6 +19,8 @@
   "menu.file_save_as": "Save as...",
   "menu.file_close": "Close",
   "menu.file_quit": "Quit",
+  "menu.edit_undo": "Undo",
+  "menu.edit_redo": "Redo",
   "menu.edit_select_all": "Select all",
   "menu.edit_find": "Find / Replace...",
   "menu.edit_preferences": "Preferences...",
@@ -90,5 +92,7 @@
   "shortcuts.format_code": "Format code",
   "shortcuts.goto_line": "Go to line",
   "shortcuts.toggle_sidebar": "Toggle sidebar",
-  "shortcuts.quit": "Quit"
+  "shortcuts.quit": "Quit",
+  "shortcuts.undo": "Undo",
+  "shortcuts.redo": "Redo"
 }

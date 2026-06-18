@@ -128,6 +128,8 @@ fn menu_items(
                 disabled_item(t!("menu.edit_format").to_string(), dark)
             };
             vec![
+                item(t!("menu.edit_undo").to_string(), sc(&sh.undo), dark, Message::Undo),
+                item(t!("menu.edit_redo").to_string(), sc(&sh.redo), dark, Message::Redo),
                 item(t!("menu.edit_select_all").to_string(), sc(&sh.select_all), dark, Message::SelectAll),
                 item(t!("menu.edit_find").to_string(), sc(&sh.find), dark, Message::ToggleSearch),
                 item(t!("menu.edit_goto_line").to_string(), sc(&sh.goto_line), dark, Message::OpenGotoLine),

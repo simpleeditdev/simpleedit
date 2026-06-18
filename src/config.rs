@@ -15,6 +15,8 @@ pub enum ShortcutTarget {
     GotoLine,
     ToggleSidebar,
     Quit,
+    Undo,
+    Redo,
 }
 
 /// A single keyboard binding stored as display-friendly strings.
@@ -62,6 +64,8 @@ pub struct Shortcuts {
     pub goto_line: ShortcutConfig,
     pub toggle_sidebar: ShortcutConfig,
     pub quit: ShortcutConfig,
+    pub undo: ShortcutConfig,
+    pub redo: ShortcutConfig,
 }
 
 impl Default for Shortcuts {
@@ -78,6 +82,8 @@ impl Default for Shortcuts {
             goto_line: ShortcutConfig::ctrl("g"),
             toggle_sidebar: ShortcutConfig::ctrl("b"),
             quit: ShortcutConfig::ctrl("q"),
+            undo: ShortcutConfig::ctrl("z"),
+            redo: ShortcutConfig::ctrl("y"),
         }
     }
 }

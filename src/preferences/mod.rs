@@ -142,9 +142,6 @@ impl PreferencesState {
                     checkbox(t!("prefs.show_line_numbers"), self.show_line_numbers)
                         .text_size(13)
                         .on_toggle(|v| Message::Preferences(PreferencesMessage::ShowLineNumbersToggled(v))),
-                    checkbox(t!("prefs.word_wrap"), self.word_wrap)
-                        .text_size(13)
-                        .on_toggle(|v| Message::Preferences(PreferencesMessage::WordWrapToggled(v))),
                     checkbox(t!("prefs.auto_indent"), self.auto_indent)
                         .text_size(13)
                         .on_toggle(|v| Message::Preferences(PreferencesMessage::AutoIndentToggled(v))),
@@ -154,9 +151,6 @@ impl PreferencesState {
                     checkbox(t!("prefs.autocomplete_quotes"), self.autocomplete_quotes)
                         .text_size(13)
                         .on_toggle(|v| Message::Preferences(PreferencesMessage::AutocompleteQuotesToggled(v))),
-                    checkbox(t!("prefs.highlight_current_line"), self.highlight_current_line)
-                        .text_size(13)
-                        .on_toggle(|v| Message::Preferences(PreferencesMessage::HighlightCurrentLineToggled(v))),
                 ]
                 .spacing(14)
                 .padding(18)

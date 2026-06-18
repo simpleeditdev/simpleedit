@@ -166,6 +166,7 @@ pub mod statusbar {
         dark: bool,
         cursor: (usize, usize),
         is_error: bool,
+        language: Option<&'a str>,
     ) -> Element<'a, Message> {
         let file_info = current_file
             .as_ref()
@@ -179,17 +180,27 @@ pub mod statusbar {
         let (line, col) = cursor;
         let cursor_text = format!("Ln {}, Col {}", line + 1, col + 1);
 
-        // Error messages use the danger color so they're impossible to miss
         let status_color = if is_error {
-            iced::Color::from_rgb(0.88, 0.27, 0.18) // red-orange
+            iced::Color::from_rgb(0.88, 0.27, 0.18)
         } else {
             muted
         };
 
+        // Resolve language token → display name
+        let lang_label = language
+            .and_then(|tok| {
+                crate::editor::SUPPORTED_LANGUAGES
+                    .iter()
+                    .find(|(t, _)| *t == tok)
+                    .map(|(_, name)| *name)
+            })
+            .unwrap_or("");
+
         let bar = row![
             text(status).size(11).style(status_color),
             Space::with_width(Length::Fill),
-            text(cursor_text).size(11).style(muted),
+            text(lang_label).size(11).style(muted),
+            text(format!("  {}", cursor_text)).size(11).style(muted),
             text(format!("  {}{}", file_info, dirty_indicator))
                 .size(11)
                 .style(if is_dirty { theme::accent_color() } else { muted }),

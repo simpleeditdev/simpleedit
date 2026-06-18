@@ -65,6 +65,9 @@ pub enum Message {
     FileFormatted(Result<String, String>),
     SelectionFormatted(Result<String, String>),
     CloseErrorPanel,
+    Undo,
+    Redo,
+    AutoSave,
     // Raw key press forwarded from the subscription (non-capturing fn pointer)
     KeyPressed { key: String, ctrl: bool, shift: bool, alt: bool },
     EscapePressed,
@@ -100,6 +103,10 @@ pub struct TinctaApp {
     file_cache: HashMap<PathBuf, (String, Option<String>, bool)>,
     overlay: ActiveOverlay,
     goto_line_input: String,
+    /// Per-keystroke undo history (capped at 100 snapshots).
+    undo_stack: Vec<String>,
+    /// Redo history rebuilt when undoing.
+    redo_stack: Vec<String>,
 }
 
 impl Application for TinctaApp {
@@ -110,36 +117,35 @@ impl Application for TinctaApp {
 
     fn new(_flags: ()) -> (Self, Command<Message>) {
         let config = Config::load();
-        let editor = EditorState::new();
-        let initial_path = untitled_path(1);
-        let mut sidebar = SidebarState::new();
-        sidebar.add_file(initial_path.clone());
+        let session = crate::session::Session::load();
 
-        (
-            Self {
-                editor,
-                sidebar,
-                search: SearchState::new(),
-                preferences: PreferencesState::from_config(&config),
-                show_search: false,
-                show_sidebar: true,
-                show_preferences: false,
-                open_menu: None,
-                current_file: Some(initial_path),
-                is_dirty: false,
-                is_formatting: false,
-                status_message: t!("status.ready").to_string(),
-                status_is_error: false,
-                format_error: None,
-                show_error_panel: false,
-                untitled_counter: 1,
-                file_cache: HashMap::new(),
-                overlay: ActiveOverlay::None,
-                goto_line_input: String::new(),
-                config,
-            },
-            Command::none(),
-        )
+        let mut app = Self {
+            editor: EditorState::new(),
+            sidebar: SidebarState::new(),
+            search: SearchState::new(),
+            preferences: PreferencesState::from_config(&config),
+            show_search: false,
+            show_sidebar: true,
+            show_preferences: false,
+            open_menu: None,
+            current_file: None,
+            is_dirty: false,
+            is_formatting: false,
+            status_message: t!("status.ready").to_string(),
+            status_is_error: false,
+            format_error: None,
+            show_error_panel: false,
+            untitled_counter: 1,
+            file_cache: HashMap::new(),
+            overlay: ActiveOverlay::None,
+            goto_line_input: String::new(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            config,
+        };
+
+        app.restore_session(session);
+        (app, Command::none())
     }
 
     fn title(&self) -> String {
@@ -162,6 +168,10 @@ impl Application for TinctaApp {
         match message {
             Message::EditorAction(action) => {
                 let is_edit = action.is_edit();
+
+                if is_edit {
+                    self.push_undo();
+                }
 
                 // Auto-indent: replicate leading whitespace of current line on Enter
                 if self.config.auto_indent {
@@ -273,6 +283,8 @@ impl Application for TinctaApp {
                 self.current_file = Some(path.clone());
                 self.sidebar.add_file(path);
                 self.is_dirty = false;
+                self.undo_stack.clear();
+                self.redo_stack.clear();
                 self.status_message = t!("status.new_file").to_string();
                 Command::none()
             }
@@ -342,7 +354,10 @@ impl Application for TinctaApp {
                 self.editor = EditorState::new();
                 self.current_file = None;
                 self.is_dirty = false;
+                self.undo_stack.clear();
+                self.redo_stack.clear();
                 self.status_message = t!("status.ready").to_string();
+                self.save_session();
                 Command::none()
             }
             Message::ToggleSearch => {
@@ -377,6 +392,8 @@ impl Application for TinctaApp {
                             ),
                         );
                     }
+                    self.undo_stack.clear();
+                    self.redo_stack.clear();
                     if let Some((content, language, dirty)) = self.file_cache.get(&path).cloned() {
                         self.editor = EditorState::from_content(&content);
                         self.editor.language = language;
@@ -394,7 +411,12 @@ impl Application for TinctaApp {
                         self.editor = EditorState::new();
                         self.current_file = None;
                         self.is_dirty = false;
+                        self.undo_stack.clear();
+                        self.redo_stack.clear();
+                    } else {
+                        self.file_cache.remove(&path);
                     }
+                    self.save_session();
                     Command::none()
                 }
                 SidebarAction::SaveFile(path) => {
@@ -523,6 +545,38 @@ impl Application for TinctaApp {
                 self.show_error_panel = false;
                 Command::none()
             }
+            Message::Undo => {
+                if let Some(prev) = self.undo_stack.pop() {
+                    let current = self.editor.content.text().to_string();
+                    if self.redo_stack.len() >= 100 {
+                        self.redo_stack.remove(0);
+                    }
+                    self.redo_stack.push(current);
+                    let lang = self.editor.language.clone();
+                    self.editor.content = text_editor::Content::with_text(&prev);
+                    self.editor.language = lang;
+                    self.is_dirty = true;
+                }
+                Command::none()
+            }
+            Message::Redo => {
+                if let Some(next) = self.redo_stack.pop() {
+                    let current = self.editor.content.text().to_string();
+                    if self.undo_stack.len() >= 100 {
+                        self.undo_stack.remove(0);
+                    }
+                    self.undo_stack.push(current);
+                    let lang = self.editor.language.clone();
+                    self.editor.content = text_editor::Content::with_text(&next);
+                    self.editor.language = lang;
+                    self.is_dirty = true;
+                }
+                Command::none()
+            }
+            Message::AutoSave => {
+                self.save_session();
+                Command::none()
+            }
             // --- Overlays ---
             Message::CloseOverlay => {
                 self.overlay = ActiveOverlay::None;
@@ -593,6 +647,8 @@ impl Application for TinctaApp {
                         ShortcutTarget::GotoLine => self.config.shortcuts.goto_line = sc,
                         ShortcutTarget::ToggleSidebar => self.config.shortcuts.toggle_sidebar = sc,
                         ShortcutTarget::Quit => self.config.shortcuts.quit = sc,
+                        ShortcutTarget::Undo => self.config.shortcuts.undo = sc,
+                        ShortcutTarget::Redo => self.config.shortcuts.redo = sc,
                     }
                     self.config.save();
                     self.overlay = ActiveOverlay::Shortcuts { capturing: None };
@@ -607,7 +663,9 @@ impl Application for TinctaApp {
                     s.key.eq_ignore_ascii_case(&key) && s.ctrl == ctrl && s.shift == shift && s.alt == alt
                 };
                 let sh = &self.config.shortcuts;
-                let msg = if sc_check(&sh.save_as) { Some(Message::SaveFileAs) }
+                let msg = if sc_check(&sh.undo) { Some(Message::Undo) }
+                    else if sc_check(&sh.redo) { Some(Message::Redo) }
+                    else if sc_check(&sh.save_as) { Some(Message::SaveFileAs) }
                     else if sc_check(&sh.new_file) { Some(Message::NewFile) }
                     else if sc_check(&sh.save_file) { Some(Message::SaveFile) }
                     else if sc_check(&sh.open_file) { Some(Message::OpenFile) }
@@ -631,9 +689,7 @@ impl Application for TinctaApp {
     }
 
     fn subscription(&self) -> iced::Subscription<Message> {
-        // on_key_press requires a fn pointer (no captures), so we forward raw key info
-        // as Message::KeyPressed / EscapePressed and dispatch in update().
-        iced::keyboard::on_key_press(|key, modifiers| {
+        let keys = iced::keyboard::on_key_press(|key, modifiers| {
             use iced::keyboard::{key::Named, Key};
 
             if key == Key::Named(Named::Escape) {
@@ -667,7 +723,12 @@ impl Application for TinctaApp {
                 shift: modifiers.shift(),
                 alt: modifiers.alt(),
             })
-        })
+        });
+
+        let autosave = iced::time::every(std::time::Duration::from_secs(5))
+            .map(|_| Message::AutoSave);
+
+        iced::Subscription::batch([keys, autosave])
     }
 
     fn view(&self) -> Element<Message> {
@@ -761,6 +822,7 @@ impl Application for TinctaApp {
             dark,
             cursor,
             self.status_is_error,
+            self.editor.language.as_deref(),
         );
 
         let error_panel: Option<Element<Message>> = if self.show_error_panel {
@@ -1052,6 +1114,8 @@ impl TinctaApp {
         let sc = &self.config.shortcuts;
 
         let rows_data: Vec<(ShortcutTarget, String, &crate::config::ShortcutConfig)> = vec![
+            (ShortcutTarget::Undo, t!("shortcuts.undo").to_string(), &sc.undo),
+            (ShortcutTarget::Redo, t!("shortcuts.redo").to_string(), &sc.redo),
             (ShortcutTarget::NewFile, t!("shortcuts.new_file").to_string(), &sc.new_file),
             (ShortcutTarget::OpenFile, t!("shortcuts.open_file").to_string(), &sc.open_file),
             (ShortcutTarget::SaveFile, t!("shortcuts.save_file").to_string(), &sc.save_file),
@@ -1139,6 +1203,95 @@ impl TinctaApp {
         .width(400)
         .style(tincta_theme::card(dark))
         .into()
+    }
+
+    // ─── Undo / redo ────────────────────────────────────────────────────────
+
+    fn push_undo(&mut self) {
+        let snapshot = self.editor.content.text().to_string();
+        if self.undo_stack.len() >= 100 {
+            self.undo_stack.remove(0);
+        }
+        self.undo_stack.push(snapshot);
+        self.redo_stack.clear();
+    }
+
+    // ─── Session persistence ─────────────────────────────────────────────────
+
+    fn save_session(&self) {
+        use crate::session::{FileSession, Session};
+        let files: Vec<FileSession> = self
+            .sidebar
+            .files()
+            .iter()
+            .map(|path| {
+                let (content, language, dirty) = if self.current_file.as_ref() == Some(path) {
+                    (self.editor.content.text().to_string(), self.editor.language.clone(), self.is_dirty)
+                } else if let Some((c, l, d)) = self.file_cache.get(path) {
+                    (c.clone(), l.clone(), *d)
+                } else {
+                    (String::new(), None, false)
+                };
+                FileSession {
+                    path: path.to_str().unwrap_or("").to_string(),
+                    content: if is_untitled(path) || dirty { Some(content) } else { None },
+                    language,
+                    dirty,
+                }
+            })
+            .collect();
+
+        Session {
+            files,
+            active_file: self.current_file.as_ref()
+                .and_then(|p| p.to_str())
+                .map(|s| s.to_string()),
+            untitled_counter: self.untitled_counter,
+        }
+        .save();
+    }
+
+    fn restore_session(&mut self, session: crate::session::Session) {
+        if session.files.is_empty() {
+            // First launch: start with a blank untitled file
+            let path = untitled_path(1);
+            self.sidebar.add_file(path.clone());
+            self.current_file = Some(path);
+            self.untitled_counter = 1;
+            return;
+        }
+
+        self.untitled_counter = session.untitled_counter.max(1);
+
+        for fs in &session.files {
+            let path = PathBuf::from(&fs.path);
+            self.sidebar.add_file(path.clone());
+
+            let content = if let Some(c) = &fs.content {
+                c.clone()
+            } else if !is_untitled(&path) {
+                std::fs::read_to_string(&path).unwrap_or_default()
+            } else {
+                String::new()
+            };
+            self.file_cache.insert(path, (content, fs.language.clone(), fs.dirty));
+        }
+
+        // Activate the previously active file
+        let active_path = session
+            .active_file
+            .as_deref()
+            .or_else(|| session.files.first().map(|f| f.path.as_str()))
+            .map(PathBuf::from);
+
+        if let Some(path) = active_path {
+            if let Some((content, language, dirty)) = self.file_cache.remove(&path) {
+                self.editor = EditorState::from_content(&content);
+                self.editor.language = language;
+                self.is_dirty = dirty;
+                self.current_file = Some(path);
+            }
+        }
     }
 }
 

@@ -37,6 +37,10 @@ impl SidebarState {
         }
     }
 
+    pub fn files(&self) -> &[PathBuf] {
+        &self.files
+    }
+
     pub fn add_file(&mut self, path: PathBuf) {
         if !self.files.contains(&path) {
             self.files.push(path.clone());

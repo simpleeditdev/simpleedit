@@ -17,6 +17,7 @@ mod i18n;
 mod menu_bar;
 mod preferences;
 mod search;
+mod session;
 mod sidebar;
 mod theme;
 mod formatter;

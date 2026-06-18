@@ -19,6 +19,8 @@
   "menu.file_save_as": "Enregistrer sous...",
   "menu.file_close": "Fermer",
   "menu.file_quit": "Quitter",
+  "menu.edit_undo": "Annuler",
+  "menu.edit_redo": "Rétablir",
   "menu.edit_select_all": "Tout sélectionner",
   "menu.edit_find": "Rechercher / Remplacer...",
   "menu.edit_preferences": "Préférences...",
@@ -90,5 +92,7 @@
   "shortcuts.format_code": "Formater le code",
   "shortcuts.goto_line": "Aller à la ligne",
   "shortcuts.toggle_sidebar": "Panneau latéral",
-  "shortcuts.quit": "Quitter"
+  "shortcuts.quit": "Quitter",
+  "shortcuts.undo": "Annuler",
+  "shortcuts.redo": "Rétablir"
 }
