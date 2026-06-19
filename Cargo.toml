@@ -1,6 +1,6 @@
 [package]
 name = "tincta"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 description = "A fast, stable, cross-platform text editor"
 license = "MIT"
@@ -45,4 +45,6 @@ section = "editors"
 priority = "optional"
 assets = [
     ["target/release/tincta", "usr/bin/", "755"],
+    ["assets/tincta.desktop", "usr/share/applications/", "644"],
+    ["assets/tincta.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
 ]
