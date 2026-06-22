@@ -6,6 +6,7 @@ use iced::{
 use crate::{app::Message, config::Config, theme};
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum PreferencesMessage {
     FontSizeChanged(f32),
     TabWidthChanged(usize),
@@ -108,7 +109,7 @@ impl PreferencesState {
         }
     }
 
-    pub fn view(&self, dark: bool) -> Element<Message> {
+    pub fn view(&self, dark: bool) -> Element<'_, Message> {
         let muted = theme::muted_text(dark);
         let section = |label: String| text(label).size(11).style(muted);
 

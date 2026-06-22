@@ -4,7 +4,7 @@ use iced::{
     Alignment, Application, Command, Element, Length, Theme,
 };
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::{
     config::{Config, ShortcutConfig, ShortcutTarget},
@@ -200,8 +200,8 @@ impl Application for TinctaApp {
                 let is_edit = action.is_edit();
 
                 if is_edit {
-                    match &action {
-                        text_editor::Action::Edit(edit) => match edit {
+                    if let text_editor::Action::Edit(edit) = &action {
+                        match edit {
                             text_editor::Edit::Insert(ch) => {
                                 if ch.is_whitespace() {
                                     // Whitespace ends the current word group; next non-ws starts a new one
@@ -218,8 +218,7 @@ impl Application for TinctaApp {
                                 self.push_undo();
                                 self.undo_new_group = true;
                             }
-                        },
-                        _ => {}
+                        }
                     }
                 } else {
                     // Motion action: next edit opens a new group
@@ -1060,7 +1059,7 @@ impl Application for TinctaApp {
         iced::Subscription::batch([keys, autosave])
     }
 
-    fn view(&self) -> Element<Message> {
+    fn view(&self) -> Element<'_, Message> {
         let dark = self.config.dark_mode;
 
         let menu_bar = crate::menu_bar::view(&self.config, self.open_menu);
@@ -1077,7 +1076,7 @@ impl Application for TinctaApp {
             .editor
             .language
             .as_deref()
-            .map(|ext| crate::formatter::has_formatter(ext))
+            .map(crate::formatter::has_formatter)
             .unwrap_or(false);
         let has_sel_ctx = self.editor.content.selection().is_some();
         let editor_with_context = iced_aw::ContextMenu::new(editor_widget, move || {
@@ -1248,7 +1247,7 @@ impl Application for TinctaApp {
                 .editor
                 .language
                 .as_deref()
-                .map(|ext| crate::formatter::has_formatter(ext))
+                .map(crate::formatter::has_formatter)
                 .unwrap_or(false);
             let lang_override_enabled = self.language_picker_enabled();
             let dropdown =
@@ -1327,7 +1326,7 @@ impl TinctaApp {
         }
     }
 
-    fn view_about_overlay(&self, dark: bool) -> Element<Message> {
+    fn view_about_overlay(&self, dark: bool) -> Element<'_, Message> {
         let p = tincta_theme::palette(dark);
         let version = env!("CARGO_PKG_VERSION");
         container(
@@ -1354,21 +1353,18 @@ impl TinctaApp {
         .into()
     }
 
-    fn view_goto_line_overlay(&self, dark: bool) -> Element<Message> {
+    fn view_goto_line_overlay(&self, dark: bool) -> Element<'_, Message> {
         let p = tincta_theme::palette(dark);
         container(
             column![
                 text(t!("goto_line.title").to_string())
                     .size(14)
                     .style(p.text),
-                text_input(
-                    &t!("goto_line.placeholder").to_string(),
-                    &self.goto_line_input
-                )
-                .on_input(Message::GotoLineInputChanged)
-                .on_submit(Message::GotoLineSubmit)
-                .padding(8)
-                .size(14),
+                text_input(t!("goto_line.placeholder").as_ref(), &self.goto_line_input)
+                    .on_input(Message::GotoLineInputChanged)
+                    .on_submit(Message::GotoLineSubmit)
+                    .padding(8)
+                    .size(14),
                 row![
                     button(text(t!("goto_line.cancel").to_string()).size(13))
                         .padding([7, 16])
@@ -1396,7 +1392,7 @@ impl TinctaApp {
         .into()
     }
 
-    fn view_language_picker_overlay(&self, dark: bool) -> Element<Message> {
+    fn view_language_picker_overlay(&self, dark: bool) -> Element<'_, Message> {
         let p = tincta_theme::palette(dark);
         let current_lang = self.editor.language.as_deref().unwrap_or("");
 
@@ -1469,7 +1465,7 @@ impl TinctaApp {
         &self,
         dark: bool,
         capturing: Option<ShortcutTarget>,
-    ) -> Element<Message> {
+    ) -> Element<'_, Message> {
         let p = tincta_theme::palette(dark);
         let sc = &self.config.shortcuts;
 
@@ -1809,7 +1805,11 @@ pub fn toggle_comment(text: &str, line_idx: usize, prefix: &str) -> String {
     let leading_ws: String = line.chars().take_while(|c| c.is_whitespace()).collect();
     let content = line.trim_start();
     if content.starts_with(prefix) {
-        lines[line_idx] = format!("{}{}", leading_ws, &content[prefix.len()..]);
+        lines[line_idx] = format!(
+            "{}{}",
+            leading_ws,
+            content.strip_prefix(prefix).unwrap_or(content)
+        );
     } else {
         lines[line_idx] = format!("{}{}{}", leading_ws, prefix, content);
     }
@@ -1835,7 +1835,7 @@ pub fn dedent_text(text: &str, indent: &str) -> String {
             if let Some(stripped) = line.strip_prefix(indent) {
                 stripped.to_string()
             } else if line.starts_with('\t') {
-                line[1..].to_string()
+                line.strip_prefix('\t').unwrap_or("").to_string()
             } else {
                 let n = line
                     .chars()
@@ -1858,7 +1858,7 @@ pub fn dedent_line(text: &str, line_idx: usize, indent: &str) -> String {
     lines[line_idx] = if let Some(stripped) = line.strip_prefix(indent) {
         stripped.to_string()
     } else if line.starts_with('\t') {
-        line[1..].to_string()
+        line.strip_prefix('\t').unwrap_or("").to_string()
     } else {
         let n = line
             .chars()
@@ -1876,7 +1876,7 @@ pub fn untitled_path(n: u32) -> PathBuf {
     PathBuf::from(format!("untitled://{}", n))
 }
 
-pub fn is_untitled(path: &PathBuf) -> bool {
+pub fn is_untitled(path: &Path) -> bool {
     path.to_str()
         .map(|s| s.starts_with("untitled://"))
         .unwrap_or(false)

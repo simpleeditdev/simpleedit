@@ -25,11 +25,11 @@ mod theme;
 i18n!("src/i18n");
 
 fn main() -> iced::Result {
-    let locale = std::env::var("LANG")
-        .unwrap_or_default()
-        .starts_with("fr")
-        .then_some("fr")
-        .unwrap_or("en");
+    let locale = if std::env::var("LANG").unwrap_or_default().starts_with("fr") {
+        "fr"
+    } else {
+        "en"
+    };
     rust_i18n::set_locale(locale);
 
     // Optional file path passed as first CLI argument: `tincta path/to/file`

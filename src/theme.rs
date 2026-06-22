@@ -295,6 +295,7 @@ impl button::StyleSheet for SidebarRow {
 
 /// A small destructive-leaning text action (used inside the inline file
 /// action row, e.g. "Fermer").
+#[allow(dead_code)]
 pub struct TextAction {
     pub dark: bool,
     pub enabled: bool,

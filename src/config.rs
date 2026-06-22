@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Identifies which action is being rebound in the shortcuts config panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,7 +217,7 @@ impl Config {
     }
 
     /// Add a file to the recent files list (max 10, no duplicates, no untitled).
-    pub fn add_recent(&mut self, path: &PathBuf) {
+    pub fn add_recent(&mut self, path: &Path) {
         if path
             .to_str()
             .map(|s| s.starts_with("untitled://"))

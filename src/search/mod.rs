@@ -8,6 +8,7 @@ use crate::app::Message;
 use crate::theme;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum SearchMessage {
     QueryChanged(String),
     ReplaceChanged(String),
@@ -110,7 +111,7 @@ impl SearchState {
         }
     }
 
-    pub fn view(&self, dark: bool) -> Element<Message> {
+    pub fn view(&self, dark: bool) -> Element<'_, Message> {
         let count_label = if self.match_count > 0 {
             format!("{} {}", self.match_count, t!("search.matches"))
         } else if let Some(ref e) = self.last_error {

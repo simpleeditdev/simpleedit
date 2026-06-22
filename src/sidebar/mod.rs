@@ -81,7 +81,7 @@ impl SidebarState {
         }
     }
 
-    pub fn view(&self, dark: bool, current_file: &Option<PathBuf>) -> Element<Message> {
+    pub fn view(&self, dark: bool, current_file: &Option<PathBuf>) -> Element<'_, Message> {
         let lbl_close = t!("sidebar.close").to_string();
         let lbl_save = t!("sidebar.save").to_string();
         let lbl_save_as = t!("sidebar.save_as").to_string();
@@ -121,7 +121,7 @@ impl SidebarState {
                 let lbl_save = lbl_save.clone();
                 let lbl_save_as = lbl_save_as.clone();
                 let path_for_save = path.clone();
-                let path_for_close = path.clone();
+                let _path_for_close = path.clone();
 
                 iced_aw::ContextMenu::new(row_button, move || {
                     let ctx_item =
@@ -155,7 +155,8 @@ impl SidebarState {
                             ),
                             ctx_item(
                                 lbl_save_as.clone(),
-                                is_active.then(|| Message::Sidebar(SidebarMessage::RequestSaveAs)),
+                                is_active
+                                    .then_some(Message::Sidebar(SidebarMessage::RequestSaveAs)),
                             ),
                         ]
                         .spacing(2)

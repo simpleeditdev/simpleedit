@@ -61,7 +61,7 @@ impl EditorState {
         self.language = extension_to_token(ext).map(|s| s.to_string());
     }
 
-    pub fn view(&self, config: &Config) -> Element<Message> {
+    pub fn view(&self, config: &Config) -> Element<'_, Message> {
         let hl_theme = if config.dark_mode {
             hl::Theme::SolarizedDark
         } else {
@@ -169,6 +169,7 @@ pub mod statusbar {
     use crate::theme;
     use std::path::PathBuf;
 
+    #[allow(clippy::too_many_arguments)]
     pub fn view<'a>(
         status: &'a str,
         current_file: &'a Option<PathBuf>,
